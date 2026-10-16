@@ -19,25 +19,41 @@ set -eu
 main() {
 SLUG=macmini_tuning
 ADDON=local_$SLUG
-DIR=/mnt/data/supervisor/addons/local/macmini-tuning
-
-case "${1:-install}" in
-  status)
-    ha addons info "$ADDON" || true
-    echo "---- recent log ----"
-    ha addons logs "$ADDON" 2>&1 | tail -n 25 || true
-    exit 0 ;;
-  uninstall)
-    ha addons stop "$ADDON" 2>/dev/null || true
-    ha addons uninstall "$ADDON" 2>/dev/null || true
-    rm -rf "$DIR"
-    ha addons reload 2>/dev/null || true
-    echo "Removed. Fans are back under SMC control."; exit 0 ;;
-esac
 
 [ "$(id -u)" = 0 ] || { echo "Run as root."; exit 1; }
 command -v ha >/dev/null 2>&1 || { echo "The 'ha' command was not found. Run this on the HAOS host (SSH port 22222), not in an add-on or another machine."; exit 1; }
-[ -d /mnt/data/supervisor/addons ] || { echo "/mnt/data/supervisor/addons not found - this does not look like the HAOS host."; exit 1; }
+
+# Home Assistant renamed "add-ons" to "apps". Newer installs use .../apps and
+# 'ha apps'; older ones use .../addons and 'ha addons'. Detect which this is.
+SUPERVISOR=${SUPERVISOR_DIR:-/mnt/data/supervisor}
+BASE=""
+for cand in apps addons; do
+  if [ -d "$SUPERVISOR/$cand" ]; then BASE=$SUPERVISOR/$cand; break; fi
+done
+if [ -z "$BASE" ]; then
+  echo "Could not find an 'apps' or 'addons' folder in $SUPERVISOR - this does not look like the HAOS host."
+  echo "Contents of $SUPERVISOR:"; ls -1 "$SUPERVISOR" 2>&1 | sed 's/^/  /'
+  exit 1
+fi
+CLI=addons
+if ha apps --help >/dev/null 2>&1; then CLI=apps; fi
+happ() { ha "$CLI" "$@"; }
+DIR=$BASE/local/macmini-tuning
+echo "Detected: folder $BASE, command 'ha $CLI'"
+
+case "${1:-install}" in
+  status)
+    happ info "$ADDON" || true
+    echo "---- recent log ----"
+    happ logs "$ADDON" 2>&1 | tail -n 25 || true
+    exit 0 ;;
+  uninstall)
+    happ stop "$ADDON" 2>/dev/null || true
+    happ uninstall "$ADDON" 2>/dev/null || true
+    rm -rf "$DIR"
+    happ reload 2>/dev/null || true
+    echo "Removed. Fans are back under SMC control."; exit 0 ;;
+esac
 
 # Clean up leftovers from the earlier systemd-based attempt, if any
 rm -rf /mnt/data/macmini-tuning
@@ -205,31 +221,31 @@ RUN_EOF
 chmod 755 "$DIR/run.sh"
 
 # ---------------------------------------------------------------------------
-echo "Add-on files written to $DIR"
+echo "Files written to $DIR"
 echo "Registering with the Supervisor (the first install builds a small image and needs internet)..."
-ha addons reload
+happ reload
 for _ in 1 2 3 4 5 6 7 8 9 10; do
-  ha addons info "$ADDON" >/dev/null 2>&1 && break
+  happ info "$ADDON" >/dev/null 2>&1 && break
   sleep 3
 done
 
-if ha addons install "$ADDON"; then
+if happ install "$ADDON"; then
   echo "Installed."
 else
   echo "Already installed (or install failed) - rebuilding with the latest files..."
-  ha addons rebuild "$ADDON" || true
+  happ rebuild "$ADDON" || true
 fi
-ha addons start "$ADDON" || ha addons restart "$ADDON" || true
+happ start "$ADDON" || happ restart "$ADDON" || true
 
 sleep 6
 echo
-echo "---- add-on log ----"
-ha addons logs "$ADDON" 2>&1 | tail -n 15 || true
+echo "---- log ----"
+happ logs "$ADDON" 2>&1 | tail -n 15 || true
 echo
 echo "It is set to start on boot. To check later, re-run this installer with the argument: status"
 echo "  e.g.  curl -fsSL <URL> | bash -s -- status"
-echo "If the install step failed, open Settings > Add-ons > Add-on Store, use the menu (three dots) > Check for updates,"
-echo "then install 'Mac mini Tuning' from the Local add-ons section and make sure 'Start on boot' is on."
+echo "If the install step failed, open Settings > Add-ons (or Apps) > Store, use the menu (three dots) > Check for updates,"
+echo "then install 'Mac mini Tuning' from the Local section and make sure 'Start on boot' is on."
 }
 
 main "$@"
