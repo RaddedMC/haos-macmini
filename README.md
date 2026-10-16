@@ -9,3 +9,10 @@ This script needs to run on system bootup with root level permissions and does t
     - Perfect for those of us who have a broken or missing temperature sensor somewhere
 
 How to run:
+1. Using a keyboard and display (or the developer SSH port 22222 method), obtain a root shell into your installation
+    - Note: The "Terminal and SSH" addon is not sufficient here since that addon still runs within a Docker container.
+2. Type and run the command
+    - `curl -fsSL https://raw.githubusercontent.com/YOU/REPO/main/install-macmini-tuning.sh | bash`
+3. If needed, you can uninstall or check status with
+    - `curl -fsSL https://raw.githubusercontent.com/YOU/REPO/main/install-macmini-tuning.sh | bash -s -- status`
+    - `curl -fsSL https://raw.githubusercontent.com/YOU/REPO/main/install-macmini-tuning.sh | bash -s -- uninstall`

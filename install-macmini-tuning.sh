@@ -3,12 +3,17 @@
 #   - Powers the machine on automatically after a power loss
 #   - Runs a quiet, temperature-driven fan curve through the applesmc driver
 #
-# Run as root on the HAOS HOST (developer SSH, port 22222), not inside an add-on:
-#   bash install-macmini-tuning.sh            # install / update
-#   bash install-macmini-tuning.sh status     # show service state + recent log
-#   bash install-macmini-tuning.sh uninstall  # remove and hand fans back to the SMC
+# Run as root on the HAOS HOST (developer SSH, port 22222), not inside an add-on.
+# Replace URL with the raw GitHub URL of this file:
+#   curl -fsSL URL | bash                       # install / update
+#   curl -fsSL URL | bash -s -- status          # show service state + recent log
+#   curl -fsSL URL | bash -s -- uninstall       # remove and hand fans back to the SMC
+# (Also works as a local file: bash install-macmini-tuning.sh [status|uninstall])
 set -eu
 
+# Everything lives inside main() and main runs on the LAST line, so a download
+# that gets cut off partway never executes a half-finished script.
+main() {
 DIR=/mnt/data/macmini-tuning
 SCRIPT=$DIR/macmini-tuning.sh
 UNIT=/etc/systemd/system/macmini-tuning.service
@@ -188,4 +193,8 @@ sleep 3
 systemctl status macmini-tuning --no-pager || true
 journalctl -u macmini-tuning -n 15 --no-pager || true
 echo
-echo "Installed. Check later with: bash $0 status"
+echo "Installed. Check later by re-running this installer with the argument: status"
+echo "  e.g.  curl -fsSL <URL> | bash -s -- status"
+}
+
+main "$@"
