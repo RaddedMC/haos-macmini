@@ -35,9 +35,25 @@ if [ -z "$BASE" ]; then
   echo "Contents of $SUPERVISOR:"; ls -1 "$SUPERVISOR" 2>&1 | sed 's/^/  /'
   exit 1
 fi
+
+# On the HAOS host, 'ha' opens an interactive session inside the CLI container
+# and needs a real terminal on stdin. When this script is piped in
+# (curl ... | bash), stdin is the script itself, so hand 'ha' the controlling
+# terminal explicitly (this also stops 'ha' from swallowing the script text).
+ha_run() {
+  if [ -t 0 ]; then
+    ha "$@"
+  elif { : </dev/tty; } 2>/dev/null; then
+    ha "$@" </dev/tty
+  else
+    # No terminal at all: talk to the CLI container without attaching stdin
+    docker exec hassio_cli ha "$@" </dev/null
+  fi
+}
+
 CLI=addons
-if ha apps --help >/dev/null 2>&1; then CLI=apps; fi
-happ() { ha "$CLI" "$@"; }
+if ha_run apps --help >/dev/null 2>&1; then CLI=apps; fi
+happ() { ha_run "$CLI" "$@"; }
 DIR=$BASE/local/macmini-tuning
 echo "Detected: folder $BASE, command 'ha $CLI'"
 
