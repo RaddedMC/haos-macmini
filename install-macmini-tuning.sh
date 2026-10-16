@@ -1,12 +1,15 @@
 #!/bin/bash
-# One-shot installer for Home Assistant OS on a Mac mini 4,1 (2010, NVIDIA MCP89).
+# Installer for Home Assistant OS on a Mac mini 4,1 (2010, NVIDIA MCP89).
 #   - Powers the machine on automatically after a power loss
 #   - Runs a quiet, temperature-driven fan curve through the applesmc driver
+#
+# HAOS has a read-only root filesystem, so this installs a small LOCAL ADD-ON
+# (privileged, starts on boot) that the Supervisor keeps running for you.
 #
 # Run as root on the HAOS HOST (developer SSH, port 22222), not inside an add-on.
 # Replace URL with the raw GitHub URL of this file:
 #   curl -fsSL URL | bash                       # install / update
-#   curl -fsSL URL | bash -s -- status          # show service state + recent log
+#   curl -fsSL URL | bash -s -- status          # show add-on state + recent log
 #   curl -fsSL URL | bash -s -- uninstall       # remove and hand fans back to the SMC
 # (Also works as a local file: bash install-macmini-tuning.sh [status|uninstall])
 set -eu
@@ -14,26 +17,58 @@ set -eu
 # Everything lives inside main() and main runs on the LAST line, so a download
 # that gets cut off partway never executes a half-finished script.
 main() {
-DIR=/mnt/data/macmini-tuning
-SCRIPT=$DIR/macmini-tuning.sh
-UNIT=/etc/systemd/system/macmini-tuning.service
+SLUG=macmini_tuning
+ADDON=local_$SLUG
+DIR=/mnt/data/supervisor/addons/local/macmini-tuning
 
 case "${1:-install}" in
   status)
-    systemctl status macmini-tuning --no-pager || true
-    journalctl -u macmini-tuning -n 25 --no-pager || true
+    ha addons info "$ADDON" || true
+    echo "---- recent log ----"
+    ha addons logs "$ADDON" 2>&1 | tail -n 25 || true
     exit 0 ;;
   uninstall)
-    systemctl disable --now macmini-tuning 2>/dev/null || true
-    rm -f "$UNIT"; rm -rf "$DIR"; systemctl daemon-reload
+    ha addons stop "$ADDON" 2>/dev/null || true
+    ha addons uninstall "$ADDON" 2>/dev/null || true
+    rm -rf "$DIR"
+    ha addons reload 2>/dev/null || true
     echo "Removed. Fans are back under SMC control."; exit 0 ;;
 esac
 
 [ "$(id -u)" = 0 ] || { echo "Run as root."; exit 1; }
+command -v ha >/dev/null 2>&1 || { echo "The 'ha' command was not found. Run this on the HAOS host (SSH port 22222), not in an add-on or another machine."; exit 1; }
+[ -d /mnt/data/supervisor/addons ] || { echo "/mnt/data/supervisor/addons not found - this does not look like the HAOS host."; exit 1; }
+
+# Clean up leftovers from the earlier systemd-based attempt, if any
+rm -rf /mnt/data/macmini-tuning
+
 mkdir -p "$DIR"
 
 # ---------------------------------------------------------------------------
-cat > "$SCRIPT" <<'SCRIPT_EOF'
+cat > "$DIR/config.yaml" <<'CONFIG_EOF'
+name: Mac mini Tuning
+version: "1.0.0"
+slug: macmini_tuning
+description: Power on after power loss and a quiet fan curve for the Mac mini 4,1
+arch:
+  - amd64
+startup: system
+boot: auto
+full_access: true
+kernel_modules: true
+CONFIG_EOF
+
+# ---------------------------------------------------------------------------
+cat > "$DIR/Dockerfile" <<'DOCKER_EOF'
+FROM alpine:3.20
+RUN apk add --no-cache bash kmod
+COPY run.sh /run.sh
+RUN chmod 755 /run.sh
+CMD ["/run.sh"]
+DOCKER_EOF
+
+# ---------------------------------------------------------------------------
+cat > "$DIR/run.sh" <<'RUN_EOF'
 #!/bin/bash
 # macmini-tuning: auto power-on after power loss + fan curve (Mac mini 4,1)
 set -u
@@ -127,7 +162,7 @@ set_fan() {
 release_fan() { [ -n "$SMC" ] && echo 0 > "$SMC/fan1_manual" 2>/dev/null; log "fan returned to SMC auto control"; }
 
 fan_loop() {
-  local t target new fails=0
+  local t target new d fails=0
   log "fan curve active: ${#TEMP_FILES[@]} sensor(s), fan ${FAN_MIN}-${FAN_MAX} RPM"
   echo 1 > "$SMC/fan1_manual" || { log "cannot enable manual fan control"; return 1; }
   while true; do
@@ -144,7 +179,7 @@ fan_loop() {
       if [ "$fails" -ge 3 ]; then set_fan "$FAN_MAX"; log "sensor read failing - fan forced to max"; fi
     fi
     power_on_after_loss >/dev/null 2>&1   # cheap re-assert in case it gets reset
-    sleep "$POLL"
+    sleep "$POLL" & wait $!
   done
 }
 
@@ -158,43 +193,43 @@ if [ "${1:-}" != "--source-only" ]; then
   for _ in $(seq 1 30); do find_sensors; [ -n "$SMC" ] && [ ${#TEMP_FILES[@]} -gt 0 ] && break; sleep 1; done
   if [ -z "$SMC" ] || [ ${#TEMP_FILES[@]} -eq 0 ]; then
     log "applesmc/temperature sensors not available (kernel lacks the driver?) - fan control skipped"
-    # Keep the service alive so the power-loss setting stays asserted.
-    while true; do sleep 60; power_on_after_loss >/dev/null 2>&1 || true; done
+    # Keep the add-on alive so the power-loss setting stays asserted.
+    while true; do sleep 60 & wait $!; power_on_after_loss >/dev/null 2>&1 || true; done
   fi
 
   FAN_MIN=$(cat "$SMC/fan1_min"); FAN_MAX=$(cat "$SMC/fan1_max")
-  trap 'release_fan; exit 0' TERM INT EXIT
+  trap 'release_fan; exit 0' TERM INT
   fan_loop
 fi
-SCRIPT_EOF
-chmod 755 "$SCRIPT"
+RUN_EOF
+chmod 755 "$DIR/run.sh"
 
 # ---------------------------------------------------------------------------
-cat > "$UNIT" <<'UNIT_EOF'
-[Unit]
-Description=Mac mini: power-on after power loss + quiet fan curve
-RequiresMountsFor=/mnt/data
-After=local-fs.target
+echo "Add-on files written to $DIR"
+echo "Registering with the Supervisor (the first install builds a small image and needs internet)..."
+ha addons reload
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  ha addons info "$ADDON" >/dev/null 2>&1 && break
+  sleep 3
+done
 
-[Service]
-Type=simple
-ExecStart=/bin/bash /mnt/data/macmini-tuning/macmini-tuning.sh
-Restart=always
-RestartSec=5
+if ha addons install "$ADDON"; then
+  echo "Installed."
+else
+  echo "Already installed (or install failed) - rebuilding with the latest files..."
+  ha addons rebuild "$ADDON" || true
+fi
+ha addons start "$ADDON" || ha addons restart "$ADDON" || true
 
-[Install]
-WantedBy=multi-user.target
-UNIT_EOF
-
-systemctl daemon-reload
-systemctl enable macmini-tuning
-systemctl restart macmini-tuning
-sleep 3
-systemctl status macmini-tuning --no-pager || true
-journalctl -u macmini-tuning -n 15 --no-pager || true
+sleep 6
 echo
-echo "Installed. Check later by re-running this installer with the argument: status"
+echo "---- add-on log ----"
+ha addons logs "$ADDON" 2>&1 | tail -n 15 || true
+echo
+echo "It is set to start on boot. To check later, re-run this installer with the argument: status"
 echo "  e.g.  curl -fsSL <URL> | bash -s -- status"
+echo "If the install step failed, open Settings > Add-ons > Add-on Store, use the menu (three dots) > Check for updates,"
+echo "then install 'Mac mini Tuning' from the Local add-ons section and make sure 'Start on boot' is on."
 }
 
 main "$@"

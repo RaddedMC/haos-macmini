@@ -8,8 +8,10 @@ This script needs to run on system bootup with root level permissions and does t
 2. Applies a quiet fan curve
     - Perfect for those of us who have a broken or missing temperature sensor somewhere
 
+# [!NOTE] I fully vibe-coded this in a few minutes and tested it on one machine on one version of HAOS. Your mileage may vary.
+
 How to run:
-1. Using a keyboard and display (or the developer SSH port 22222 method), obtain a root shell into your installation
+1. Using a keyboard and display (or the developer SSH port 22222 method), obtain a root shell into your installation by typing `login`
     - Note: The "Terminal and SSH" addon is not sufficient here since that addon still runs within a Docker container.
 2. Type and run the command
     - `curl -fsSL https://raw.githubusercontent.com/RaddedMC/haos-macmini/main/install-macmini-tuning.sh | bash`
